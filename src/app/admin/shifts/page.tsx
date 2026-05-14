@@ -1,14 +1,60 @@
 "use client";
 
-import { useState } from "react";
-import { mockShiftRequests, workLocationLabel, type ShiftStatus } from "@/lib/mockData";
+import { useCallback, useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { useRole } from "@/lib/useRole";
+import {
+  type ShiftRequestRow,
+  type ShiftStatus,
+  trimSeconds,
+  workLocationLabel,
+} from "@/lib/db";
 import { StatusBadge } from "@/components/StatusBadge";
 
 export default function AdminShiftsPage() {
-  const [requests, setRequests] = useState(mockShiftRequests);
+  const { profile } = useRole();
+  const [requests, setRequests] = useState<ShiftRequestRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  const updateStatus = (id: string, status: ShiftStatus) => {
-    setRequests(requests.map((r) => (r.id === id ? { ...r, status } : r)));
+  const load = useCallback(async () => {
+    const supabase = createClient();
+    const { data, error: selErr } = await supabase
+      .from("shift_requests")
+      .select("*, profiles!user_id(full_name)")
+      .order("shift_date", { ascending: false });
+    if (selErr) {
+      setError(selErr.message);
+      return;
+    }
+    setRequests((data ?? []) as ShiftRequestRow[]);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const updateStatus = async (id: string, status: ShiftStatus) => {
+    if (!profile) return;
+    const supabase = createClient();
+    const { data, error: upErr } = await supabase
+      .from("shift_requests")
+      .update({
+        status,
+        decided_by: status === "pending" ? null : profile.id,
+        decided_at: status === "pending" ? null : new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select();
+    if (upErr) {
+      setError(upErr.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      setError("更新できませんでした（権限不足の可能性があります）");
+      return;
+    }
+    setError(null);
+    await load();
   };
 
   return (
@@ -19,6 +65,8 @@ export default function AdminShiftsPage() {
           申請を「承認 / 却下」します。承認されたシフトは一般カレンダーに「確定」として表示されます。
         </p>
       </header>
+
+      {error && <p className="text-xs text-rose-600">{error}</p>}
 
       <section className="overflow-x-auto rounded-lg border border-zinc-200 bg-white p-4 sm:p-6 dark:border-zinc-800 dark:bg-zinc-950">
         <table className="w-full min-w-[640px] text-sm">
@@ -35,10 +83,10 @@ export default function AdminShiftsPage() {
           <tbody>
             {requests.map((r) => (
               <tr key={r.id} className="border-b border-zinc-100 dark:border-zinc-900">
-                <td className="py-2">{r.userName}</td>
-                <td className="py-2">{r.date}</td>
-                <td className="py-2 font-mono">{r.startTime} - {r.endTime}</td>
-                <td className="py-2">{workLocationLabel[r.workLocation]}</td>
+                <td className="py-2">{r.profiles?.full_name ?? "(不明)"}</td>
+                <td className="py-2">{r.shift_date}</td>
+                <td className="py-2 font-mono">{trimSeconds(r.start_time)} - {trimSeconds(r.end_time)}</td>
+                <td className="py-2">{workLocationLabel[r.work_location]}</td>
                 <td className="py-2"><StatusBadge variant={r.status} /></td>
                 <td className="py-2 text-right">
                   {r.status === "pending" ? (
@@ -70,6 +118,11 @@ export default function AdminShiftsPage() {
                 </td>
               </tr>
             ))}
+            {requests.length === 0 && (
+              <tr>
+                <td colSpan={6} className="py-4 text-center text-zinc-500">申請はまだありません</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </section>

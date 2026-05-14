@@ -9,7 +9,7 @@ type Props = {
   children: React.ReactNode;
 };
 
-// モック専用ガード: ロール未設定なら /login へ。owner 限定ページは employee なら / にリダイレクト。
+// 未ログインなら /login へ。owner 限定ページに employee がアクセスしたら / に戻す。
 export function RoleGuard({ require, children }: Props) {
   const router = useRouter();
   const { role, hydrated } = useRole();

@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useRole } from "@/lib/useRole";
-import { mockUser } from "@/lib/mockData";
 
 type NavItem = { href: string; label: string };
 
@@ -26,7 +25,7 @@ const adminNav: NavItem[] = [
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { role, setRole, hydrated } = useRole();
+  const { profile, role, hydrated, signOut } = useRole();
   const [open, setOpen] = useState(false);
 
   // ルート変更時にモバイルメニューを閉じる
@@ -34,8 +33,8 @@ export function Sidebar() {
     setOpen(false);
   }, [pathname]);
 
-  const handleLogout = () => {
-    setRole(null);
+  const handleLogout = async () => {
+    await signOut();
     router.push("/login");
   };
 
@@ -78,7 +77,7 @@ export function Sidebar() {
           <div>
             <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">勤怠管理</p>
             <p className="mt-1 flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
-              <span>{mockUser.name}</span>
+              <span>{profile?.fullName ?? "..."}</span>
               <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
                 {hydrated ? (role === "owner" ? "管理者" : role === "employee" ? "一般" : "未ログイン") : "..."}
               </span>

@@ -1,34 +1,62 @@
 "use client";
 
-import { useState } from "react";
-import { mockShiftRequests, mockUser, workLocationLabel, type WorkLocation } from "@/lib/mockData";
+import { useCallback, useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { useRole } from "@/lib/useRole";
+import {
+  type ShiftRequestRow,
+  type WorkLocation,
+  trimSeconds,
+  workLocationLabel,
+} from "@/lib/db";
 import { StatusBadge } from "@/components/StatusBadge";
 
 export default function ShiftRequestPage() {
-  const [requests, setRequests] = useState(
-    mockShiftRequests.filter((r) => r.userName === mockUser.name)
-  );
+  const { profile } = useRole();
+  const [requests, setRequests] = useState<ShiftRequestRow[]>([]);
   const [date, setDate] = useState("");
   const [start, setStart] = useState("09:00");
   const [end, setEnd] = useState("18:00");
   const [workLocation, setWorkLocation] = useState<WorkLocation>("office");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const load = useCallback(async () => {
+    if (!profile) return;
+    const supabase = createClient();
+    const { data } = await supabase
+      .from("shift_requests")
+      .select("*")
+      .eq("user_id", profile.id)
+      .order("shift_date", { ascending: false });
+    setRequests((data ?? []) as ShiftRequestRow[]);
+  }, [profile]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!date) return;
-    setRequests([
-      ...requests,
-      {
-        id: `s-${Date.now()}`,
-        userName: mockUser.name,
-        date,
-        startTime: start,
-        endTime: end,
-        workLocation,
-        status: "pending",
-      },
-    ]);
+    if (!profile || !date) return;
+    setSubmitting(true);
+    setError(null);
+    const supabase = createClient();
+    const { error: insErr } = await supabase.from("shift_requests").insert({
+      user_id: profile.id,
+      shift_date: date,
+      start_time: start,
+      end_time: end,
+      work_location: workLocation,
+      status: "pending",
+    });
+    setSubmitting(false);
+    if (insErr) {
+      setError(insErr.message);
+      return;
+    }
     setDate("");
+    await load();
   };
 
   return (
@@ -51,6 +79,7 @@ export default function ShiftRequestPage() {
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
+              required
               className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
             />
           </div>
@@ -97,11 +126,14 @@ export default function ShiftRequestPage() {
           </div>
         </div>
 
+        {error && <p className="text-xs text-rose-600">{error}</p>}
+
         <button
           type="submit"
-          className="w-full rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900"
+          disabled={submitting}
+          className="w-full rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
         >
-          申請する
+          {submitting ? "送信中..." : "申請する"}
         </button>
       </form>
 
@@ -119,9 +151,9 @@ export default function ShiftRequestPage() {
           <tbody>
             {requests.map((r) => (
               <tr key={r.id} className="border-b border-zinc-100 dark:border-zinc-900">
-                <td className="py-2">{r.date}</td>
-                <td className="py-2 font-mono">{r.startTime} - {r.endTime}</td>
-                <td className="py-2">{workLocationLabel[r.workLocation]}</td>
+                <td className="py-2">{r.shift_date}</td>
+                <td className="py-2 font-mono">{trimSeconds(r.start_time)} - {trimSeconds(r.end_time)}</td>
+                <td className="py-2">{workLocationLabel[r.work_location]}</td>
                 <td className="py-2"><StatusBadge variant={r.status} /></td>
               </tr>
             ))}

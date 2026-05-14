@@ -1,7 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { mockShiftRequests, mockUser, workLocationLabel } from "@/lib/mockData";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { useRole } from "@/lib/useRole";
+import {
+  type ShiftRequestRow,
+  trimSeconds,
+  workLocationLabel,
+  toYmd,
+} from "@/lib/db";
 
 type CalDay = {
   date: Date;
@@ -17,21 +24,37 @@ function buildCalendar(year: number, month: number): CalDay[] {
   for (let i = 0; i < 42; i++) {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
-    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    days.push({ date: d, inMonth: d.getMonth() === month, iso });
+    days.push({ date: d, inMonth: d.getMonth() === month, iso: toYmd(d) });
   }
   return days;
 }
 
 export default function ShiftCalendarPage() {
-  const [cursor, setCursor] = useState(new Date(2026, 4, 1)); // 2026-05
+  const { profile } = useRole();
+  const [cursor, setCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [shifts, setShifts] = useState<ShiftRequestRow[]>([]);
   const days = useMemo(() => buildCalendar(cursor.getFullYear(), cursor.getMonth()), [cursor]);
 
-  const myApprovedShifts = mockShiftRequests.filter(
-    (r) => r.userName === mockUser.name && r.status === "approved"
-  );
-  const shiftsByDate = new Map(myApprovedShifts.map((s) => [s.date, s]));
+  const load = useCallback(async () => {
+    if (!profile) return;
+    const supabase = createClient();
+    const from = toYmd(new Date(cursor.getFullYear(), cursor.getMonth(), 1));
+    const to = toYmd(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0));
+    const { data } = await supabase
+      .from("shift_requests")
+      .select("*")
+      .eq("user_id", profile.id)
+      .eq("status", "approved")
+      .gte("shift_date", from)
+      .lte("shift_date", to);
+    setShifts((data ?? []) as ShiftRequestRow[]);
+  }, [profile, cursor]);
 
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const shiftsByDate = new Map(shifts.map((s) => [s.shift_date, s]));
   const monthLabel = `${cursor.getFullYear()}年 ${cursor.getMonth() + 1}月`;
 
   return (
@@ -80,13 +103,13 @@ export default function ShiftCalendarPage() {
                 {shift && (
                   <div
                     className={`mt-1 rounded px-1 py-0.5 text-[9px] sm:px-1.5 sm:text-[11px] ${
-                      shift.workLocation === "remote"
+                      shift.work_location === "remote"
                         ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
                         : "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
                     }`}
                   >
-                    <div>{workLocationLabel[shift.workLocation]}</div>
-                    <div className="font-mono">{shift.startTime}-{shift.endTime}</div>
+                    <div>{workLocationLabel[shift.work_location]}</div>
+                    <div className="font-mono">{trimSeconds(shift.start_time)}-{trimSeconds(shift.end_time)}</div>
                   </div>
                 )}
               </div>

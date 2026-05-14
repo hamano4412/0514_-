@@ -1,14 +1,48 @@
 "use client";
 
-import { useState } from "react";
-import { mockPayslips, mockOtherPayslips, formatYen } from "@/lib/mockData";
+import { useCallback, useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { type PayslipRow, formatYen } from "@/lib/db";
 import { StatusBadge } from "@/components/StatusBadge";
 
 export default function AdminPayslipsPage() {
-  const [payslips, setPayslips] = useState([...mockPayslips, ...mockOtherPayslips]);
+  const [payslips, setPayslips] = useState<PayslipRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  const markPaid = (id: string) => {
-    setPayslips(payslips.map((p) => (p.id === id ? { ...p, status: "paid" as const } : p)));
+  const load = useCallback(async () => {
+    const supabase = createClient();
+    const { data, error: selErr } = await supabase
+      .from("payslips")
+      .select("*, profiles(full_name)")
+      .order("year_month", { ascending: false });
+    if (selErr) {
+      setError(selErr.message);
+      return;
+    }
+    setPayslips((data ?? []) as PayslipRow[]);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const markPaid = async (id: string) => {
+    const supabase = createClient();
+    const { data, error: upErr } = await supabase
+      .from("payslips")
+      .update({ status: "paid", paid_at: new Date().toISOString() })
+      .eq("id", id)
+      .select();
+    if (upErr) {
+      setError(upErr.message);
+      return;
+    }
+    if (!data || data.length === 0) {
+      setError("更新できませんでした（権限不足の可能性があります）");
+      return;
+    }
+    setError(null);
+    await load();
   };
 
   return (
@@ -19,6 +53,8 @@ export default function AdminPayslipsPage() {
           給料明細を「支払済」に変更します。一般ユーザー側の明細にも反映されます。
         </p>
       </header>
+
+      {error && <p className="text-xs text-rose-600">{error}</p>}
 
       <section className="overflow-x-auto rounded-lg border border-zinc-200 bg-white p-4 sm:p-6 dark:border-zinc-800 dark:bg-zinc-950">
         <table className="w-full min-w-[800px] text-sm">
@@ -37,10 +73,10 @@ export default function AdminPayslipsPage() {
           <tbody>
             {payslips.map((p) => (
               <tr key={p.id} className="border-b border-zinc-100 dark:border-zinc-900">
-                <td className="py-2">{p.yearMonth}</td>
-                <td className="py-2">{p.userName}</td>
-                <td className="py-2 font-mono">{formatYen(p.baseSalary)}</td>
-                <td className="py-2 font-mono">{formatYen(p.transportFee)}</td>
+                <td className="py-2">{p.year_month}</td>
+                <td className="py-2">{p.profiles?.full_name ?? "(不明)"}</td>
+                <td className="py-2 font-mono">{formatYen(p.base_salary)}</td>
+                <td className="py-2 font-mono">{formatYen(p.transport_fee)}</td>
                 <td className="py-2 font-mono">{formatYen(p.deductions)}</td>
                 <td className="py-2 font-mono font-semibold">{formatYen(p.total)}</td>
                 <td className="py-2"><StatusBadge variant={p.status} /></td>
@@ -59,6 +95,11 @@ export default function AdminPayslipsPage() {
                 </td>
               </tr>
             ))}
+            {payslips.length === 0 && (
+              <tr>
+                <td colSpan={8} className="py-4 text-center text-zinc-500">明細はまだ発行されていません</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </section>

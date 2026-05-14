@@ -1,29 +1,99 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { mockCommute, mockAttendances, formatYen, type CommuteSegment } from "@/lib/mockData";
+import { useCallback, useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { useRole } from "@/lib/useRole";
+import { type CommuteRow, formatYen, monthRange } from "@/lib/db";
+
+type DraftSegment = { id?: string; route: string; round_trip_fee: number };
 
 export default function TransitPage() {
-  const [segments, setSegments] = useState<CommuteSegment[]>(mockCommute.segments);
+  const { profile } = useRole();
+  const [segments, setSegments] = useState<DraftSegment[]>([{ route: "", round_trip_fee: 0 }]);
+  const [workdays, setWorkdays] = useState(0);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const workdays = mockAttendances.length;
-  const segmentTotal = segments.reduce((sum, s) => sum + (Number(s.roundTripFee) || 0), 0);
-  const monthlyTotal = workdays * segmentTotal;
+  const load = useCallback(async () => {
+    if (!profile) return;
+    const supabase = createClient();
+    const { from, to } = monthRange();
 
-  const updateSegment = (index: number, patch: Partial<CommuteSegment>) => {
-    setSegments(segments.map((s, i) => (i === index ? { ...s, ...patch } : s)));
+    const [commuteRes, attRes] = await Promise.all([
+      supabase
+        .from("commutes")
+        .select("*")
+        .eq("user_id", profile.id)
+        .order("sort_order", { ascending: true }),
+      supabase
+        .from("attendances")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", profile.id)
+        .gte("work_date", from)
+        .lte("work_date", to),
+    ]);
+
+    const rows = (commuteRes.data ?? []) as CommuteRow[];
+    setSegments(
+      rows.length === 0
+        ? [{ route: "", round_trip_fee: 0 }]
+        : rows.map((r) => ({ id: r.id, route: r.route, round_trip_fee: r.round_trip_fee })),
+    );
+    setWorkdays(attRes.count ?? 0);
+  }, [profile]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const updateSegment = (i: number, patch: Partial<DraftSegment>) => {
+    setSegments(segments.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
   };
-
-  const addSegment = () => {
-    setSegments([...segments, { route: "", roundTripFee: 0 }]);
-  };
-
-  const removeSegment = (index: number) => {
+  const addSegment = () => setSegments([...segments, { route: "", round_trip_fee: 0 }]);
+  const removeSegment = (i: number) => {
     if (segments.length <= 1) return;
-    setSegments(segments.filter((_, i) => i !== index));
+    setSegments(segments.filter((_, idx) => idx !== i));
   };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile) return;
+    setSaving(true);
+    setError(null);
+    const supabase = createClient();
+    // シンプルな実装: 既存を全削除 → 新規 INSERT
+    const { error: delErr } = await supabase.from("commutes").delete().eq("user_id", profile.id);
+    if (delErr) {
+      setError(delErr.message);
+      setSaving(false);
+      return;
+    }
+    const validSegments = segments.filter((s) => s.route.trim() !== "");
+    if (validSegments.length > 0) {
+      const { error: insErr } = await supabase.from("commutes").insert(
+        validSegments.map((s, i) => ({
+          user_id: profile.id,
+          route: s.route,
+          round_trip_fee: Number(s.round_trip_fee) || 0,
+          sort_order: i,
+        })),
+      );
+      if (insErr) {
+        setError(insErr.message);
+        setSaving(false);
+        return;
+      }
+    }
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+    await load();
+  };
+
+  const segmentTotal = segments.reduce((sum, s) => sum + (Number(s.round_trip_fee) || 0), 0);
+  const monthlyTotal = workdays * segmentTotal;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -39,11 +109,7 @@ export default function TransitPage() {
 
       <form
         className="space-y-4 rounded-lg border border-zinc-200 bg-white p-4 sm:p-6 dark:border-zinc-800 dark:bg-zinc-950"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setSaved(true);
-          setTimeout(() => setSaved(false), 2000);
-        }}
+        onSubmit={handleSave}
       >
         <div className="space-y-3">
           {segments.map((seg, i) => (
@@ -77,8 +143,8 @@ export default function TransitPage() {
                   <label className="mb-1 block text-xs font-medium text-zinc-700 dark:text-zinc-300">往復金額（円）</label>
                   <input
                     type="number"
-                    value={seg.roundTripFee}
-                    onChange={(e) => updateSegment(i, { roundTripFee: Number(e.target.value) })}
+                    value={seg.round_trip_fee}
+                    onChange={(e) => updateSegment(i, { round_trip_fee: Number(e.target.value) })}
                     min={0}
                     className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
                   />
@@ -99,11 +165,13 @@ export default function TransitPage() {
         <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center">
           <button
             type="submit"
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900"
+            disabled={saving}
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
           >
-            保存
+            {saving ? "保存中..." : "保存"}
           </button>
-          {saved && <span className="text-xs text-emerald-600">保存しました（モック）</span>}
+          {saved && <span className="text-xs text-emerald-600">保存しました</span>}
+          {error && <span className="text-xs text-rose-600">{error}</span>}
         </div>
       </form>
 
